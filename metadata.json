@@ -1,0 +1,6 @@
+{
+  "name": "WFMV",
+  "description": "Wafa File Manager — Premium Android Smart Storage & Private Space Ecosystem developed by Md. Mehedi Hasan",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,107 @@
+name: WFMV Android Build & Debug APK Delivery
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths-ignore:
+      - 'APK_DOWNLOAD/**'
+      - '.build-outputs/**'
+      - 'README.md'
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Debug APK & Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x gradlew || true
+
+      - name: Prepare Local Properties & Environment
+        run: |
+          touch .env
+          echo "Building WFMV - Wafa File Manager..."
+
+      - name: Run Unit Tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Locate and Validate Real Debug APK
+        id: locate_apk
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" -type f | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "::error::Real Debug APK not found in app/build/outputs/apk/debug!"
+            exit 1
+          fi
+          echo "APK located at: $APK_PATH"
+
+          # Check size
+          APK_SIZE=$(stat -c%s "$APK_PATH")
+          echo "APK Size: $APK_SIZE bytes"
+          if [ "$APK_SIZE" -lt 1000000 ]; then
+            echo "::error::Generated APK size is unexpectedly small ($APK_SIZE bytes). Aborting."
+            exit 1
+          fi
+
+          # Prepare output directories
+          mkdir -p .build-outputs
+          mkdir -p APK_DOWNLOAD
+
+          # Copy APK
+          cp "$APK_PATH" .build-outputs/app-debug.apk
+          cp "$APK_PATH" APK_DOWNLOAD/app-debug.apk
+
+          # Validate integrity using unzip
+          unzip -t APK_DOWNLOAD/app-debug.apk
+
+          # Calculate and compare SHA-256
+          HASH_BUILD=$(sha256sum .build-outputs/app-debug.apk | awk '{print $1}')
+          HASH_DOWNLOAD=$(sha256sum APK_DOWNLOAD/app-debug.apk | awk '{print $1}')
+          echo "SHA256 (.build-outputs): $HASH_BUILD"
+          echo "SHA256 (APK_DOWNLOAD):  $HASH_DOWNLOAD"
+
+          if [ "$HASH_BUILD" != "$HASH_DOWNLOAD" ]; then
+            echo "::error::Checksum mismatch between build outputs and download directory!"
+            exit 1
+          fi
+
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "sha256=$HASH_DOWNLOAD" >> $GITHUB_OUTPUT
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfmv-app-debug-apk
+          path: APK_DOWNLOAD/app-debug.apk
+          retention-days: 14
+
+      - name: Commit Generated APK to Repository (Code Browser Delivery)
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .build-outputs/app-debug.apk APK_DOWNLOAD/app-debug.apk
+          git diff --staged --quiet || (git commit -m "build: update real debug APK [skip ci]" && git push)
